@@ -9,17 +9,49 @@ A robust, lightweight exception tracking SDK for React Native applications. It s
 npm install react-native-3rddigital-exception-tracking
 ```
 
+This package uses `axios` for uploads and `react-native-device-info` to add app, OS, and device context to each payload.
+
 
 ## Usage
 
 
 ```js
-import { multiply } from 'react-native-3rddigital-exception-tracking';
+import {
+  captureException,
+  setCurrentScreen,
+  setExceptionContext,
+  setupExceptionTracking,
+} from 'react-native-3rddigital-exception-tracking';
 
-// ...
+const API_BASE_URL = getValueFromYourAppConfig('API_BASE_URL');
+const API_KEY = getValueFromYourAppConfig('API_KEY');
+const PROJECT_KEY = getValueFromYourAppConfig('PROJECT_KEY');
 
-const result = multiply(3, 7);
+setupExceptionTracking({
+  url: API_BASE_URL,
+  apiKey: API_KEY,
+  projectKey: PROJECT_KEY,
+  allowedInDevMode: true,
+  extraData: {
+    environment: 'production',
+    userId: currentUser.id,
+  },
+});
+
+setCurrentScreen('Checkout');
+setExceptionContext({
+  userId: currentUser.id,
+  plan: currentUser.plan,
+});
+
+captureException(new Error('Manual error'), {
+  action: 'Pay button pressed',
+});
 ```
+
+`url`, `apiKey`, and `projectKey` are required. All other setup options are optional.
+The SDK sends exceptions to `${url}/exceptions/ingest/${projectKey}` and handles a trailing slash in `url`.
+Use `setCurrentScreen` or `setExceptionContext` whenever navigation or user/session data changes. Manual `captureException` extra data overrides setup and context values for that one payload.
 
 
 ## Contributing

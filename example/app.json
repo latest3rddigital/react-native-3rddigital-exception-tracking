@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "3rddigitalExceptionTracking Example",
+    "name": "3rdDigital Exception Tracking Example",
     "slug": "react-native-3rddigital-exception-tracking-example",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -13,7 +13,7 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "3rddigitalexceptiontracking.example"
+      "bundleIdentifier": "com.thirddigital.exceptiontracking.example"
     },
     "android": {
       "adaptiveIcon": {
@@ -22,7 +22,7 @@
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
-      "package": "3rddigitalexceptiontracking.example"
+      "package": "com.thirddigital.exceptiontracking.example"
     },
     "web": {
       "favicon": "./assets/favicon.png"
