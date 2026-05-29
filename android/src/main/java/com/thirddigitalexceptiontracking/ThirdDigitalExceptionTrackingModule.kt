@@ -311,6 +311,7 @@ object NativeExceptionReporter {
         payload.put("exceptionData", exceptionData)
 
         val context = appContext
+        var uniqueId: String? = payload.optString("deviceId").takeIf { it.isNotBlank() }
         if (context != null) {
             val packageInfo = try {
                 context.packageManager.getPackageInfo(context.packageName, 0)
@@ -324,10 +325,10 @@ object NativeExceptionReporter {
                 @Suppress("DEPRECATION")
                 packageInfo?.versionCode?.toString()
             }
-            val uniqueId = Settings.Secure.getString(
+            uniqueId = Settings.Secure.getString(
                 context.contentResolver,
                 Settings.Secure.ANDROID_ID
-            )
+            )?.takeIf { it.isNotBlank() } ?: uniqueId
             if (!versionName.isNullOrBlank()) {
                 payload.put("appVersion", versionName)
             }
@@ -357,21 +358,25 @@ object NativeExceptionReporter {
         deviceInfo.put("brand", Build.BRAND)
         deviceInfo.put("manufacturer", Build.MANUFACTURER)
         deviceInfo.put("model", Build.MODEL)
+        deviceInfo.put("modelId", Build.DEVICE)
         deviceInfo.put("deviceName", Build.MODEL)
-        deviceInfo.put("deviceId", Build.DEVICE)
+        if (!uniqueId.isNullOrBlank()) {
+            deviceInfo.put("deviceId", uniqueId)
+            deviceInfo.put("uniqueId", uniqueId)
+        }
         deviceInfo.put("systemName", "Android")
         deviceInfo.put("systemVersion", Build.VERSION.RELEASE)
         deviceInfo.put("isTablet", false)
         deviceInfo.put("deviceType", Build.TYPE)
         deviceInfo.put("hasNotch", false)
-        payload.optString("deviceId").takeIf { it.isNotBlank() }?.let {
-            deviceInfo.put("uniqueId", it)
-        }
         payload.put("deviceInfo", deviceInfo)
 
-        payload.put("memoryInfo", buildMemoryInfo(context))
-        payload.put("storageInfo", buildStorageInfo(context))
-        payload.put("batteryInfo", buildBatteryInfo(context))
+        val memoryInfo = buildMemoryInfo(context)
+        val storageInfo = buildStorageInfo(context)
+        val batteryInfo = buildBatteryInfo(context)
+        payload.put("memoryInfo", memoryInfo)
+        payload.put("storageInfo", storageInfo)
+        payload.put("batteryInfo", batteryInfo)
         if (!payload.has("userInfo") || payload.isNull("userInfo")) {
             payload.put("userInfo", JSONObject())
         }
@@ -380,6 +385,9 @@ object NativeExceptionReporter {
         otherDetails.put("exceptionSource", "native")
         otherDetails.put("platform", "android")
         otherDetails.put("framework", "react-native")
+        otherDetails.put("memoryInfo", memoryInfo)
+        otherDetails.put("storageInfo", storageInfo)
+        otherDetails.put("batteryInfo", batteryInfo)
         removePrivateFields(otherDetails)
         payload.put("otherDetails", otherDetails)
         val extraData = payload.optJSONObject("extraData") ?: JSONObject(otherDetails.toString())

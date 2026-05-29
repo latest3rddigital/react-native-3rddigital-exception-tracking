@@ -4,6 +4,7 @@
 #import <execinfo.h>
 #import <signal.h>
 #import <stdatomic.h>
+#import <sys/utsname.h>
 #import <unistd.h>
 
 static NSString * const RNUncaughtExceptionHandlerSignalExceptionName = @"RNUncaughtExceptionHandlerSignalExceptionName";
@@ -34,6 +35,7 @@ static void RemovePrivateFields(NSMutableDictionary *dictionary);
 static NSDictionary *BuildMemoryInfo(void);
 static NSDictionary *BuildStorageInfo(void);
 static NSDictionary *BuildBatteryInfo(void);
+static NSString *DeviceModelIdentifier(void);
 
 @implementation ThirdDigitalExceptionTracking
 
@@ -414,7 +416,14 @@ static NSDictionary *BuildPayload(NSException *exception)
     NSString *appVersion = bundleInfo[@"CFBundleShortVersionString"];
     NSString *buildNumber = bundleInfo[(NSString *)kCFBundleVersionKey];
     NSString *bundleId = NSBundle.mainBundle.bundleIdentifier;
-    NSString *uniqueId = UIDevice.currentDevice.identifierForVendor.UUIDString;
+    NSString *uniqueId = @"";
+    if ([payload[@"deviceId"] isKindOfClass:[NSString class]]) {
+        uniqueId = payload[@"deviceId"];
+    }
+    if (uniqueId.length == 0) {
+        uniqueId = UIDevice.currentDevice.identifierForVendor.UUIDString;
+    }
+    NSString *modelId = DeviceModelIdentifier();
 
     if (appVersion.length > 0) {
         payload[@"appVersion"] = appVersion;
@@ -445,8 +454,8 @@ static NSDictionary *BuildPayload(NSException *exception)
     NSMutableDictionary *deviceInfo = [NSMutableDictionary dictionaryWithDictionary:payload[@"deviceInfo"] ?: @{}];
     deviceInfo[@"brand"] = @"Apple";
     deviceInfo[@"manufacturer"] = @"Apple";
-    deviceInfo[@"model"] = UIDevice.currentDevice.model;
-    deviceInfo[@"deviceId"] = UIDevice.currentDevice.model;
+    deviceInfo[@"model"] = modelId.length > 0 ? modelId : UIDevice.currentDevice.model;
+    deviceInfo[@"modelId"] = modelId.length > 0 ? modelId : UIDevice.currentDevice.model;
     deviceInfo[@"deviceName"] = UIDevice.currentDevice.name;
     deviceInfo[@"systemName"] = UIDevice.currentDevice.systemName;
     deviceInfo[@"systemVersion"] = UIDevice.currentDevice.systemVersion;
@@ -454,12 +463,16 @@ static NSDictionary *BuildPayload(NSException *exception)
     deviceInfo[@"deviceType"] = UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPad ? @"Tablet" : @"Handset";
     deviceInfo[@"hasNotch"] = @NO;
     if (uniqueId.length > 0) {
+        deviceInfo[@"deviceId"] = uniqueId;
         deviceInfo[@"uniqueId"] = uniqueId;
     }
     payload[@"deviceInfo"] = deviceInfo;
-    payload[@"memoryInfo"] = BuildMemoryInfo();
-    payload[@"storageInfo"] = BuildStorageInfo();
-    payload[@"batteryInfo"] = BuildBatteryInfo();
+    NSDictionary *memoryInfo = BuildMemoryInfo();
+    NSDictionary *storageInfo = BuildStorageInfo();
+    NSDictionary *batteryInfo = BuildBatteryInfo();
+    payload[@"memoryInfo"] = memoryInfo;
+    payload[@"storageInfo"] = storageInfo;
+    payload[@"batteryInfo"] = batteryInfo;
     if (![payload[@"userInfo"] isKindOfClass:[NSDictionary class]]) {
         payload[@"userInfo"] = @{};
     }
@@ -468,6 +481,9 @@ static NSDictionary *BuildPayload(NSException *exception)
     otherDetails[@"exceptionSource"] = @"native";
     otherDetails[@"platform"] = @"ios";
     otherDetails[@"framework"] = @"react-native";
+    otherDetails[@"memoryInfo"] = memoryInfo;
+    otherDetails[@"storageInfo"] = storageInfo;
+    otherDetails[@"batteryInfo"] = batteryInfo;
     RemovePrivateFields(otherDetails);
     payload[@"otherDetails"] = otherDetails;
 
@@ -530,6 +546,16 @@ static NSDictionary *BuildBatteryInfo(void)
 
     device.batteryMonitoringEnabled = wasMonitoring;
     return batteryInfo;
+}
+
+static NSString *DeviceModelIdentifier(void)
+{
+    struct utsname systemInfo;
+    if (uname(&systemInfo) != 0) {
+        return @"";
+    }
+    return [NSString stringWithCString:systemInfo.machine
+                              encoding:NSUTF8StringEncoding] ?: @"";
 }
 
 static NSString *StackTraceString(NSException *exception)

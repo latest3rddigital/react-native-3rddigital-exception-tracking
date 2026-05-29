@@ -58,6 +58,7 @@ export type ExceptionPayload = {
     brand: string;
     manufacturer?: string;
     model: string;
+    modelId: string;
     deviceId: string;
     uniqueId: string;
     systemName: string;
@@ -289,7 +290,8 @@ const getDeviceInfo = () => {
       brand: DeviceInfo.getBrand(),
       manufacturer: DeviceInfo.getManufacturerSync?.(),
       model: DeviceInfo.getModel(),
-      deviceId: deviceModelId,
+      modelId: deviceModelId,
+      deviceId: uniqueId,
       uniqueId,
       systemName: DeviceInfo.getSystemName(),
       systemVersion,
@@ -388,6 +390,9 @@ export const buildExceptionPayload = ({
     exceptionSource,
     platform: Platform.OS,
     framework: 'react-native',
+    memoryInfo: deviceContext.memoryInfo,
+    storageInfo: deviceContext.storageInfo,
+    batteryInfo: deviceContext.batteryInfo,
   };
   const screenName = getStringValue(otherDetails.screenName);
   const userInfo = isObject(otherDetails.userInfo) ? otherDetails.userInfo : {};
@@ -436,6 +441,7 @@ export const setExceptionContext = (context: ExceptionContext) => {
 export const clearExceptionContext = (keys?: Array<keyof ExceptionContext>) => {
   if (!keys) {
     currentContext = {};
+    refreshNativeBasePayload();
     return;
   }
 
