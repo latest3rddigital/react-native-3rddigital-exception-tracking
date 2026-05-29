@@ -379,14 +379,44 @@ static NSDictionary *BuildPayload(NSException *exception)
         metadata[@"projectKey"] = projectKey;
     }
 
-    payload[@"source"] = @"native";
+    payload[@"source"] = @"react-native";
+    payload[@"exceptionSource"] = @"native";
     payload[@"stackSource"] = @"native";
     payload[@"platform"] = @"ios";
     payload[@"title"] = exception.name;
     payload[@"message"] = exception.reason ?: exception.name;
     payload[@"stackTrace"] = StackTraceString(exception);
     payload[@"timestamp"] = IsoTimestamp();
+    payload[@"reportedAt"] = payload[@"timestamp"];
     payload[@"metadata"] = metadata;
+
+    NSMutableDictionary *exceptionData = [NSMutableDictionary dictionaryWithDictionary:payload[@"exceptionData"] ?: @{}];
+    exceptionData[@"exceptionSource"] = @"native";
+    exceptionData[@"exceptionName"] = exception.name;
+    exceptionData[@"reason"] = exception.reason ?: @"";
+    exceptionData[@"platform"] = @"ios";
+    exceptionData[@"framework"] = @"react-native";
+    payload[@"exceptionData"] = exceptionData;
+
+    NSDictionary *bundleInfo = NSBundle.mainBundle.infoDictionary ?: @{};
+    NSString *appVersion = bundleInfo[@"CFBundleShortVersionString"];
+    NSString *buildNumber = bundleInfo[(NSString *)kCFBundleVersionKey];
+    NSString *bundleId = NSBundle.mainBundle.bundleIdentifier;
+    NSString *uniqueId = UIDevice.currentDevice.identifierForVendor.UUIDString;
+
+    if (appVersion.length > 0) {
+        payload[@"appVersion"] = appVersion;
+    }
+    if (buildNumber.length > 0) {
+        payload[@"buildNumber"] = buildNumber;
+    }
+    if (bundleId.length > 0) {
+        payload[@"bundleId"] = bundleId;
+    }
+    if (uniqueId.length > 0) {
+        payload[@"deviceId"] = uniqueId;
+        payload[@"installationId"] = uniqueId;
+    }
 
     NSMutableDictionary *osInfo = [NSMutableDictionary dictionaryWithDictionary:payload[@"osInfo"] ?: @{}];
     osInfo[@"osName"] = @"ios";
@@ -401,7 +431,16 @@ static NSDictionary *BuildPayload(NSException *exception)
     deviceInfo[@"name"] = UIDevice.currentDevice.name;
     deviceInfo[@"systemName"] = UIDevice.currentDevice.systemName;
     deviceInfo[@"systemVersion"] = UIDevice.currentDevice.systemVersion;
+    if (uniqueId.length > 0) {
+        deviceInfo[@"uniqueId"] = uniqueId;
+    }
     payload[@"deviceInfo"] = deviceInfo;
+
+    NSMutableDictionary *otherDetails = [NSMutableDictionary dictionaryWithDictionary:payload[@"otherDetails"] ?: @{}];
+    otherDetails[@"exceptionSource"] = @"native";
+    otherDetails[@"platform"] = @"ios";
+    otherDetails[@"framework"] = @"react-native";
+    payload[@"otherDetails"] = otherDetails;
 
     return payload;
 }

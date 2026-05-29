@@ -2,6 +2,7 @@ package com.thirddigitalexceptiontracking
 
 import android.content.Context
 import android.os.Build
+import android.provider.Settings
 import android.util.Log
 import com.facebook.react.bridge.Callback
 import com.facebook.react.bridge.ReadableMap
@@ -268,14 +269,56 @@ object NativeExceptionReporter {
         metadata.put("framework", "react-native")
         projectKey?.let { metadata.put("projectKey", it) }
 
-        payload.put("source", "native")
+        payload.put("source", "react-native")
+        payload.put("exceptionSource", "native")
         payload.put("stackSource", "native")
         payload.put("platform", "android")
         payload.put("title", throwable.javaClass.name)
         payload.put("message", throwable.message ?: throwable.toString())
+        val reportedAt = getIsoTimestamp()
         payload.put("stackTrace", Log.getStackTraceString(throwable))
-        payload.put("timestamp", getIsoTimestamp())
+        payload.put("timestamp", reportedAt)
+        payload.put("reportedAt", reportedAt)
         payload.put("metadata", metadata)
+
+        val exceptionData = payload.optJSONObject("exceptionData") ?: JSONObject()
+        exceptionData.put("exceptionSource", "native")
+        exceptionData.put("exceptionClass", throwable.javaClass.name)
+        exceptionData.put("localizedMessage", throwable.localizedMessage)
+        exceptionData.put("platform", "android")
+        exceptionData.put("framework", "react-native")
+        payload.put("exceptionData", exceptionData)
+
+        val context = appContext
+        if (context != null) {
+            val packageInfo = try {
+                context.packageManager.getPackageInfo(context.packageName, 0)
+            } catch (_: Exception) {
+                null
+            }
+            val versionName = packageInfo?.versionName
+            val buildNumber = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                packageInfo?.longVersionCode?.toString()
+            } else {
+                @Suppress("DEPRECATION")
+                packageInfo?.versionCode?.toString()
+            }
+            val uniqueId = Settings.Secure.getString(
+                context.contentResolver,
+                Settings.Secure.ANDROID_ID
+            )
+            if (!versionName.isNullOrBlank()) {
+                payload.put("appVersion", versionName)
+            }
+            if (!buildNumber.isNullOrBlank()) {
+                payload.put("buildNumber", buildNumber)
+            }
+            payload.put("bundleId", context.packageName)
+            if (!uniqueId.isNullOrBlank()) {
+                payload.put("deviceId", uniqueId)
+                payload.put("installationId", uniqueId)
+            }
+        }
 
         val osInfo = payload.optJSONObject("osInfo") ?: JSONObject()
         osInfo.put("osName", "android")
@@ -288,7 +331,16 @@ object NativeExceptionReporter {
         deviceInfo.put("manufacturer", Build.MANUFACTURER)
         deviceInfo.put("model", Build.MODEL)
         deviceInfo.put("device", Build.DEVICE)
+        payload.optString("deviceId").takeIf { it.isNotBlank() }?.let {
+            deviceInfo.put("uniqueId", it)
+        }
         payload.put("deviceInfo", deviceInfo)
+
+        val otherDetails = payload.optJSONObject("otherDetails") ?: JSONObject()
+        otherDetails.put("exceptionSource", "native")
+        otherDetails.put("platform", "android")
+        otherDetails.put("framework", "react-native")
+        payload.put("otherDetails", otherDetails)
 
         return payload
     }

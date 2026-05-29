@@ -16,10 +16,12 @@ export {
 } from './ExceptionTracking';
 
 export type {
+  ExceptionContext,
+  ExceptionOrigin,
   ExceptionPayload,
   ExceptionPayloadInput,
   ExceptionSource,
-  ExceptionContext,
+  ExceptionStackSource,
   ExtraData,
   JSExceptionHandler,
   NativeExceptionHandler,

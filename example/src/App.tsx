@@ -2,6 +2,7 @@ import { Button, StyleSheet, Text, View } from 'react-native';
 import {
   captureException,
   setCurrentScreen,
+  setExceptionContext,
   setupExceptionTracking,
 } from 'react-native-3rddigital-exception-tracking';
 
@@ -15,11 +16,21 @@ setupExceptionTracking({
   projectKey: PROJECT_KEY,
   allowedInDevMode: true,
   extraData: {
+    environment: 'production',
     appArea: 'example',
+    releaseChannel: 'internal',
+    userInfo: {
+      id: 'example-user-id',
+      email: 'user@example.com',
+    },
   },
 });
 
 setCurrentScreen('ExampleHome');
+setExceptionContext({
+  sessionId: 'example-session-id',
+  accountType: 'demo',
+});
 
 export default function App() {
   return (
@@ -36,6 +47,11 @@ export default function App() {
         onPress={() => {
           captureException(new Error('Example manual exception'), {
             action: 'Manual capture button pressed',
+            feature: 'example-home',
+            requestId: 'example-request-id',
+            exceptionData: {
+              handled: true,
+            },
           }).catch((error) => {
             console.log('Manual exception capture failed', error);
           });

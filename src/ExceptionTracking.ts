@@ -8,6 +8,7 @@ const noop = () => {};
 export type ExtraData = Record<string, unknown>;
 export type ExceptionContext = ExtraData & {
   screenName?: string;
+  userInfo?: ExtraData;
 };
 
 export type JSExceptionHandler = (error: Error, isFatal?: boolean) => void;
@@ -18,10 +19,12 @@ export type NativeExceptionHandler = (
   uploadedByNative?: boolean
 ) => boolean | void | Promise<boolean | void>;
 
-export type ExceptionSource = 'react' | 'native';
+export type ExceptionSource = 'react-native';
+export type ExceptionOrigin = 'js' | 'react' | 'native';
+export type ExceptionStackSource = 'js' | 'native';
 
 export type ExceptionPayloadInput = {
-  source: ExceptionSource;
+  source: ExceptionOrigin;
   title: string;
   message: string;
   stackTrace?: string;
@@ -31,16 +34,22 @@ export type ExceptionPayloadInput = {
 
 export type ExceptionPayload = {
   source: ExceptionSource;
+  exceptionSource: ExceptionStackSource;
+  stackSource: ExceptionStackSource;
   title: string;
   message: string;
   stackTrace: string;
   platform: typeof Platform.OS;
   timestamp: string;
+  reportedAt: string;
   projectKey: string;
   appVersion: string;
   buildNumber: string;
+  readableVersion: string;
   bundleId: string;
   deviceId: string;
+  installationId: string;
+  screenName?: string;
   osInfo: {
     osName: typeof Platform.OS;
     osVersion: string;
@@ -51,14 +60,19 @@ export type ExceptionPayload = {
     manufacturer?: string;
     model: string;
     deviceId: string;
+    uniqueId: string;
     systemName: string;
     systemVersion: string;
     isTablet: boolean;
     deviceType: string;
     hasNotch: boolean;
+    deviceName?: string;
   };
+  userInfo: ExtraData;
+  exceptionData: ExtraData;
   metadata: ExtraData;
   extraData: ExtraData;
+  otherDetails: ExtraData;
 };
 
 export type SetupExceptionTrackingOptions = {
@@ -158,27 +172,60 @@ const normalizeNativePayload = (nativePayload?: ExtraData | string) => {
   }
 };
 
+const isObject = (value: unknown): value is ExtraData => {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+};
+
+const getStringValue = (value: unknown) => {
+  return typeof value === 'string' && value.trim() ? value : undefined;
+};
+
+const safeDeviceInfoValue = <T>(getter: () => T, fallback: T): T => {
+  try {
+    return getter();
+  } catch {
+    return fallback;
+  }
+};
+
 const getDeviceInfo = () => {
+  const uniqueId = safeDeviceInfoValue(
+    () => DeviceInfo.getUniqueIdSync?.() ?? DeviceInfo.getDeviceId(),
+    DeviceInfo.getDeviceId()
+  );
+  const deviceModelId = DeviceInfo.getDeviceId();
+  const systemVersion = DeviceInfo.getSystemVersion();
+
   return {
     appVersion: DeviceInfo.getVersion(),
     buildNumber: DeviceInfo.getBuildNumber(),
+    readableVersion: safeDeviceInfoValue(
+      () => DeviceInfo.getReadableVersion(),
+      `${DeviceInfo.getVersion()} (${DeviceInfo.getBuildNumber()})`
+    ),
     bundleId: DeviceInfo.getBundleId(),
-    deviceId: DeviceInfo.getDeviceId(),
+    deviceId: uniqueId,
+    installationId: uniqueId,
     osInfo: {
       osName: Platform.OS,
-      osVersion: DeviceInfo.getSystemVersion(),
+      osVersion: systemVersion,
       apiLevel: Platform.OS === 'android' ? Platform.Version : undefined,
     },
     deviceInfo: {
       brand: DeviceInfo.getBrand(),
       manufacturer: DeviceInfo.getManufacturerSync?.(),
       model: DeviceInfo.getModel(),
-      deviceId: DeviceInfo.getDeviceId(),
+      deviceId: deviceModelId,
+      uniqueId,
       systemName: DeviceInfo.getSystemName(),
-      systemVersion: DeviceInfo.getSystemVersion(),
+      systemVersion,
       isTablet: DeviceInfo.isTablet(),
       deviceType: DeviceInfo.getDeviceType(),
       hasNotch: DeviceInfo.hasNotch(),
+      deviceName: safeDeviceInfoValue(
+        () => DeviceInfo.getDeviceNameSync?.(),
+        undefined
+      ),
     },
   };
 };
@@ -220,25 +267,55 @@ export const buildExceptionPayload = ({
 }: ExceptionPayloadInput): ExceptionPayload => {
   const configExtraData = currentConfig?.extraData ?? {};
   const deviceContext = getDeviceInfo();
+  const reportedAt = new Date().toISOString();
+  const exceptionSource: ExceptionStackSource =
+    source === 'native' ? 'native' : 'js';
+  const otherDetails: ExtraData & {
+    exceptionSource: ExceptionStackSource;
+    platform: typeof Platform.OS;
+    framework: string;
+  } = {
+    ...configExtraData,
+    ...currentContext,
+    ...extraData,
+    exceptionSource,
+    platform: Platform.OS,
+    framework: 'react-native',
+  };
+  const screenName = getStringValue(otherDetails.screenName);
+  const userInfo = isObject(otherDetails.userInfo) ? otherDetails.userInfo : {};
 
   return {
-    source,
+    source: 'react-native',
+    exceptionSource,
+    stackSource: exceptionSource,
     title,
     message,
     stackTrace,
     platform: Platform.OS,
-    timestamp: new Date().toISOString(),
+    timestamp: reportedAt,
+    reportedAt,
     projectKey: currentConfig?.projectKey ?? '',
     ...deviceContext,
+    ...(screenName ? { screenName } : {}),
+    userInfo,
+    exceptionData: {
+      exceptionSource,
+      stackSource: exceptionSource,
+      platform: Platform.OS,
+      framework: 'react-native',
+      ...(isObject(otherDetails.exceptionData)
+        ? otherDetails.exceptionData
+        : {}),
+    },
     metadata: {
       ...metadata,
       framework: 'react-native',
+      exceptionSource,
+      stackSource: exceptionSource,
     },
-    extraData: {
-      ...configExtraData,
-      ...currentContext,
-      ...extraData,
-    },
+    extraData: otherDetails,
+    otherDetails,
   };
 };
 
@@ -301,7 +378,7 @@ export const logException = async (
 export const captureException = async (error: Error, extraData?: ExtraData) => {
   return logException(
     buildExceptionPayload({
-      source: 'react',
+      source: 'js',
       title: error.name || 'Unhandled JS Exception',
       message: error.message || 'No message provided',
       stackTrace: error.stack ?? '',
@@ -479,7 +556,7 @@ export const setupExceptionTracking = (
     setJSExceptionHandler((error, isFatal) => {
       logException(
         buildExceptionPayload({
-          source: 'react',
+          source: 'js',
           title: error?.name || 'Unhandled JS Exception',
           message: error?.message || 'No message provided',
           stackTrace: error?.stack ?? '',
