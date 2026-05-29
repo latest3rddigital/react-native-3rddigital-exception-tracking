@@ -30,6 +30,10 @@ static void PersistPendingException(NSDictionary *payload);
 static void ClearPendingException(void);
 static void UploadPendingException(void);
 static NSString *IsoTimestamp(void);
+static void RemovePrivateFields(NSMutableDictionary *dictionary);
+static NSDictionary *BuildMemoryInfo(void);
+static NSDictionary *BuildStorageInfo(void);
+static NSDictionary *BuildBatteryInfo(void);
 
 @implementation ThirdDigitalExceptionTracking
 
@@ -63,6 +67,7 @@ static NSDictionary *basePayload;
 static void *lastReportedExceptionPointer;
 static BOOL pendingUploadScheduled = NO;
 static BOOL nativeHandlersInstalled = NO;
+static NSArray<NSString *> *privatePayloadKeys;
 
 RCT_EXPORT_MODULE(ThirdDigitalExceptionTracking);
 
@@ -371,13 +376,15 @@ static void ReportExceptionOnMainThread(NSException *exception)
 static NSDictionary *BuildPayload(NSException *exception)
 {
     NSMutableDictionary *payload = [NSMutableDictionary dictionaryWithDictionary:basePayload ?: @{}];
+    RemovePrivateFields(payload);
+
     NSMutableDictionary *metadata = [NSMutableDictionary dictionaryWithDictionary:payload[@"metadata"] ?: @{}];
     metadata[@"isNativeFallbackCandidate"] = @YES;
     metadata[@"framework"] = @"react-native";
     metadata[@"exceptionName"] = exception.name;
-    if (projectKey.length > 0) {
-        metadata[@"projectKey"] = projectKey;
-    }
+    metadata[@"exceptionSource"] = @"native";
+    metadata[@"stackSource"] = @"native";
+    RemovePrivateFields(metadata);
 
     payload[@"source"] = @"react-native";
     payload[@"exceptionSource"] = @"native";
@@ -388,6 +395,9 @@ static NSDictionary *BuildPayload(NSException *exception)
     payload[@"stackTrace"] = StackTraceString(exception);
     payload[@"timestamp"] = IsoTimestamp();
     payload[@"reportedAt"] = payload[@"timestamp"];
+    if (![payload[@"screenName"] isKindOfClass:[NSString class]]) {
+        payload[@"screenName"] = @"";
+    }
     payload[@"metadata"] = metadata;
 
     NSMutableDictionary *exceptionData = [NSMutableDictionary dictionaryWithDictionary:payload[@"exceptionData"] ?: @{}];
@@ -396,6 +406,8 @@ static NSDictionary *BuildPayload(NSException *exception)
     exceptionData[@"reason"] = exception.reason ?: @"";
     exceptionData[@"platform"] = @"ios";
     exceptionData[@"framework"] = @"react-native";
+    exceptionData[@"stackSource"] = @"native";
+    RemovePrivateFields(exceptionData);
     payload[@"exceptionData"] = exceptionData;
 
     NSDictionary *bundleInfo = NSBundle.mainBundle.infoDictionary ?: @{};
@@ -409,6 +421,12 @@ static NSDictionary *BuildPayload(NSException *exception)
     }
     if (buildNumber.length > 0) {
         payload[@"buildNumber"] = buildNumber;
+    }
+    if (appVersion.length > 0 || buildNumber.length > 0) {
+        payload[@"readableVersion"] = [NSString stringWithFormat:@"%@%@%@",
+                                       appVersion ?: @"",
+                                       appVersion.length > 0 && buildNumber.length > 0 ? @" " : @"",
+                                       buildNumber.length > 0 ? [NSString stringWithFormat:@"(%@)", buildNumber] : @""];
     }
     if (bundleId.length > 0) {
         payload[@"bundleId"] = bundleId;
@@ -428,21 +446,90 @@ static NSDictionary *BuildPayload(NSException *exception)
     deviceInfo[@"brand"] = @"Apple";
     deviceInfo[@"manufacturer"] = @"Apple";
     deviceInfo[@"model"] = UIDevice.currentDevice.model;
-    deviceInfo[@"name"] = UIDevice.currentDevice.name;
+    deviceInfo[@"deviceId"] = UIDevice.currentDevice.model;
+    deviceInfo[@"deviceName"] = UIDevice.currentDevice.name;
     deviceInfo[@"systemName"] = UIDevice.currentDevice.systemName;
     deviceInfo[@"systemVersion"] = UIDevice.currentDevice.systemVersion;
+    deviceInfo[@"isTablet"] = @(UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad);
+    deviceInfo[@"deviceType"] = UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPad ? @"Tablet" : @"Handset";
+    deviceInfo[@"hasNotch"] = @NO;
     if (uniqueId.length > 0) {
         deviceInfo[@"uniqueId"] = uniqueId;
     }
     payload[@"deviceInfo"] = deviceInfo;
+    payload[@"memoryInfo"] = BuildMemoryInfo();
+    payload[@"storageInfo"] = BuildStorageInfo();
+    payload[@"batteryInfo"] = BuildBatteryInfo();
+    if (![payload[@"userInfo"] isKindOfClass:[NSDictionary class]]) {
+        payload[@"userInfo"] = @{};
+    }
 
     NSMutableDictionary *otherDetails = [NSMutableDictionary dictionaryWithDictionary:payload[@"otherDetails"] ?: @{}];
     otherDetails[@"exceptionSource"] = @"native";
     otherDetails[@"platform"] = @"ios";
     otherDetails[@"framework"] = @"react-native";
+    RemovePrivateFields(otherDetails);
     payload[@"otherDetails"] = otherDetails;
 
+    NSMutableDictionary *extraData = [NSMutableDictionary dictionaryWithDictionary:payload[@"extraData"] ?: otherDetails];
+    RemovePrivateFields(extraData);
+    payload[@"extraData"] = extraData;
+
+    RemovePrivateFields(payload);
+
     return payload;
+}
+
+static void RemovePrivateFields(NSMutableDictionary *dictionary)
+{
+    if (privatePayloadKeys == nil) {
+        privatePayloadKeys = @[ @"apiKey", @"url", @"headers", @"ingestUrl", @"project", @"projectKey" ];
+    }
+    for (NSString *key in privatePayloadKeys) {
+        [dictionary removeObjectForKey:key];
+    }
+}
+
+static NSDictionary *BuildMemoryInfo(void)
+{
+    NSMutableDictionary *memoryInfo = [NSMutableDictionary dictionary];
+    memoryInfo[@"totalMemory"] = @(NSProcessInfo.processInfo.physicalMemory);
+    return memoryInfo;
+}
+
+static NSDictionary *BuildStorageInfo(void)
+{
+    NSMutableDictionary *storageInfo = [NSMutableDictionary dictionary];
+    NSError *error = nil;
+    NSDictionary *attributes = [NSFileManager.defaultManager attributesOfFileSystemForPath:NSHomeDirectory()
+                                                                                     error:&error];
+    if (error == nil) {
+        NSNumber *totalDiskCapacity = attributes[NSFileSystemSize];
+        NSNumber *freeDiskStorage = attributes[NSFileSystemFreeSize];
+        if (totalDiskCapacity != nil) {
+            storageInfo[@"totalDiskCapacity"] = totalDiskCapacity;
+        }
+        if (freeDiskStorage != nil) {
+            storageInfo[@"freeDiskStorage"] = freeDiskStorage;
+        }
+    }
+    return storageInfo;
+}
+
+static NSDictionary *BuildBatteryInfo(void)
+{
+    UIDevice *device = UIDevice.currentDevice;
+    BOOL wasMonitoring = device.batteryMonitoringEnabled;
+    device.batteryMonitoringEnabled = YES;
+
+    NSMutableDictionary *batteryInfo = [NSMutableDictionary dictionary];
+    if (device.batteryLevel >= 0) {
+        batteryInfo[@"batteryLevel"] = @(device.batteryLevel);
+    }
+    batteryInfo[@"batteryState"] = @(device.batteryState);
+
+    device.batteryMonitoringEnabled = wasMonitoring;
+    return batteryInfo;
 }
 
 static NSString *StackTraceString(NSException *exception)

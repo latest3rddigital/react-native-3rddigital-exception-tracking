@@ -1,7 +1,12 @@
 package com.thirddigitalexceptiontracking
 
+import android.app.ActivityManager
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.Context
+import android.os.BatteryManager
 import android.os.Build
+import android.os.StatFs
 import android.provider.Settings
 import android.util.Log
 import com.facebook.react.bridge.Callback
@@ -115,6 +120,14 @@ object NativeExceptionReporter {
     private var appContext: Context? = null
     @Volatile private var currentCrashLatch: CountDownLatch? = null
     @Volatile private var lastReportedThrowableId: Int? = null
+    private val privatePayloadKeys = arrayOf(
+        "apiKey",
+        "url",
+        "headers",
+        "ingestUrl",
+        "project",
+        "projectKey"
+    )
 
     fun configureNativeFallback(context: Context, options: ReadableMap) {
         appContext = context.applicationContext
@@ -263,11 +276,14 @@ object NativeExceptionReporter {
         } catch (_: Exception) {
             JSONObject()
         }
+        removePrivateFields(payload)
 
         val metadata = payload.optJSONObject("metadata") ?: JSONObject()
         metadata.put("isNativeFallbackCandidate", true)
         metadata.put("framework", "react-native")
-        projectKey?.let { metadata.put("projectKey", it) }
+        metadata.put("exceptionSource", "native")
+        metadata.put("stackSource", "native")
+        removePrivateFields(metadata)
 
         payload.put("source", "react-native")
         payload.put("exceptionSource", "native")
@@ -279,6 +295,9 @@ object NativeExceptionReporter {
         payload.put("stackTrace", Log.getStackTraceString(throwable))
         payload.put("timestamp", reportedAt)
         payload.put("reportedAt", reportedAt)
+        if (!payload.has("screenName") || payload.isNull("screenName")) {
+            payload.put("screenName", "")
+        }
         payload.put("metadata", metadata)
 
         val exceptionData = payload.optJSONObject("exceptionData") ?: JSONObject()
@@ -287,6 +306,8 @@ object NativeExceptionReporter {
         exceptionData.put("localizedMessage", throwable.localizedMessage)
         exceptionData.put("platform", "android")
         exceptionData.put("framework", "react-native")
+        exceptionData.put("stackSource", "native")
+        removePrivateFields(exceptionData)
         payload.put("exceptionData", exceptionData)
 
         val context = appContext
@@ -313,6 +334,12 @@ object NativeExceptionReporter {
             if (!buildNumber.isNullOrBlank()) {
                 payload.put("buildNumber", buildNumber)
             }
+            if (!versionName.isNullOrBlank() || !buildNumber.isNullOrBlank()) {
+                payload.put(
+                    "readableVersion",
+                    listOfNotNull(versionName, buildNumber?.let { "($it)" }).joinToString(" ")
+                )
+            }
             payload.put("bundleId", context.packageName)
             if (!uniqueId.isNullOrBlank()) {
                 payload.put("deviceId", uniqueId)
@@ -330,19 +357,101 @@ object NativeExceptionReporter {
         deviceInfo.put("brand", Build.BRAND)
         deviceInfo.put("manufacturer", Build.MANUFACTURER)
         deviceInfo.put("model", Build.MODEL)
-        deviceInfo.put("device", Build.DEVICE)
+        deviceInfo.put("deviceName", Build.MODEL)
+        deviceInfo.put("deviceId", Build.DEVICE)
+        deviceInfo.put("systemName", "Android")
+        deviceInfo.put("systemVersion", Build.VERSION.RELEASE)
+        deviceInfo.put("isTablet", false)
+        deviceInfo.put("deviceType", Build.TYPE)
+        deviceInfo.put("hasNotch", false)
         payload.optString("deviceId").takeIf { it.isNotBlank() }?.let {
             deviceInfo.put("uniqueId", it)
         }
         payload.put("deviceInfo", deviceInfo)
 
+        payload.put("memoryInfo", buildMemoryInfo(context))
+        payload.put("storageInfo", buildStorageInfo(context))
+        payload.put("batteryInfo", buildBatteryInfo(context))
+        if (!payload.has("userInfo") || payload.isNull("userInfo")) {
+            payload.put("userInfo", JSONObject())
+        }
+
         val otherDetails = payload.optJSONObject("otherDetails") ?: JSONObject()
         otherDetails.put("exceptionSource", "native")
         otherDetails.put("platform", "android")
         otherDetails.put("framework", "react-native")
+        removePrivateFields(otherDetails)
         payload.put("otherDetails", otherDetails)
+        val extraData = payload.optJSONObject("extraData") ?: JSONObject(otherDetails.toString())
+        removePrivateFields(extraData)
+        payload.put("extraData", extraData)
+
+        removePrivateFields(payload)
 
         return payload
+    }
+
+    private fun buildMemoryInfo(context: Context?): JSONObject {
+        val memoryInfo = JSONObject()
+        try {
+            val runtime = Runtime.getRuntime()
+            memoryInfo.put("usedMemory", runtime.totalMemory() - runtime.freeMemory())
+            memoryInfo.put("maxMemory", runtime.maxMemory())
+
+            if (context != null) {
+                val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+                val systemMemoryInfo = ActivityManager.MemoryInfo()
+                activityManager?.getMemoryInfo(systemMemoryInfo)
+                memoryInfo.put("totalMemory", systemMemoryInfo.totalMem)
+                memoryInfo.put("availableMemory", systemMemoryInfo.availMem)
+                memoryInfo.put("isLowMemory", systemMemoryInfo.lowMemory)
+            }
+        } catch (_: Exception) {
+        }
+        return memoryInfo
+    }
+
+    private fun buildStorageInfo(context: Context?): JSONObject {
+        val storageInfo = JSONObject()
+        try {
+            val path = context?.filesDir?.absolutePath ?: "/"
+            val statFs = StatFs(path)
+            storageInfo.put("totalDiskCapacity", statFs.totalBytes)
+            storageInfo.put("freeDiskStorage", statFs.availableBytes)
+        } catch (_: Exception) {
+        }
+        return storageInfo
+    }
+
+    private fun buildBatteryInfo(context: Context?): JSONObject {
+        val batteryInfo = JSONObject()
+        if (context == null) {
+            return batteryInfo
+        }
+
+        try {
+            val batteryStatus = context.registerReceiver(
+                null,
+                IntentFilter(Intent.ACTION_BATTERY_CHANGED)
+            )
+            val level = batteryStatus?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
+            val scale = batteryStatus?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
+            if (level >= 0 && scale > 0) {
+                batteryInfo.put("batteryLevel", level.toDouble() / scale.toDouble())
+            }
+            batteryInfo.put("batteryState", batteryStatus?.getIntExtra(BatteryManager.EXTRA_STATUS, -1))
+            batteryInfo.put("plugged", batteryStatus?.getIntExtra(BatteryManager.EXTRA_PLUGGED, -1))
+            batteryInfo.put("health", batteryStatus?.getIntExtra(BatteryManager.EXTRA_HEALTH, -1))
+            batteryInfo.put("temperature", batteryStatus?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, -1))
+            batteryInfo.put("voltage", batteryStatus?.getIntExtra(BatteryManager.EXTRA_VOLTAGE, -1))
+        } catch (_: Exception) {
+        }
+
+        return batteryInfo
+    }
+
+    private fun removePrivateFields(json: JSONObject) {
+        privatePayloadKeys.forEach { key -> json.remove(key) }
     }
 
     private fun postException(payload: JSONObject): Boolean {

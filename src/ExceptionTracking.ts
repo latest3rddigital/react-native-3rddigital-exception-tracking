@@ -42,7 +42,6 @@ export type ExceptionPayload = {
   platform: typeof Platform.OS;
   timestamp: string;
   reportedAt: string;
-  projectKey: string;
   appVersion: string;
   buildNumber: string;
   readableVersion: string;
@@ -67,7 +66,21 @@ export type ExceptionPayload = {
     deviceType: string;
     hasNotch: boolean;
     deviceName?: string;
+    isEmulator?: boolean;
+    carrier?: string;
   };
+  memoryInfo: {
+    totalMemory?: number;
+    availableMemory?: number;
+    usedMemory?: number;
+    maxMemory?: number;
+    isLowMemory?: boolean;
+  };
+  storageInfo: {
+    totalDiskCapacity?: number;
+    freeDiskStorage?: number;
+  };
+  batteryInfo: ExtraData;
   userInfo: ExtraData;
   exceptionData: ExtraData;
   metadata: ExtraData;
@@ -117,6 +130,7 @@ type ErrorUtilsLike = {
 
 let currentConfig: SetupExceptionTrackingOptions | undefined;
 let currentContext: ExceptionContext = {};
+let nativeHandlerConfigured = false;
 
 const getIngestUrl = (url: string, projectKey: string) => {
   const baseUrl = url.replace(/\/+$/, '');
@@ -188,6 +202,66 @@ const safeDeviceInfoValue = <T>(getter: () => T, fallback: T): T => {
   }
 };
 
+const omitPrivateConfigFields = <T extends ExtraData>(value: T): T => {
+  const sanitized = { ...value };
+
+  delete sanitized.apiKey;
+  delete sanitized.url;
+  delete sanitized.headers;
+  delete sanitized.ingestUrl;
+  delete sanitized.project;
+  delete sanitized.projectKey;
+
+  return sanitized;
+};
+
+const sanitizeExceptionPayload = (
+  payload: ExceptionPayload
+): ExceptionPayload => {
+  const sanitized = {
+    ...payload,
+    metadata: omitPrivateConfigFields(payload.metadata),
+    exceptionData: omitPrivateConfigFields(payload.exceptionData),
+    extraData: omitPrivateConfigFields(payload.extraData),
+    otherDetails: omitPrivateConfigFields(payload.otherDetails),
+  } as ExceptionPayload & ExtraData;
+
+  delete sanitized.apiKey;
+  delete sanitized.url;
+  delete sanitized.headers;
+  delete sanitized.ingestUrl;
+  delete sanitized.project;
+  delete sanitized.projectKey;
+
+  return sanitized;
+};
+
+const buildNativeBasePayload = () => {
+  return buildExceptionPayload({
+    source: 'native',
+    title: 'Native Exception',
+    message: 'Native exception handler configured',
+    stackTrace: '',
+  });
+};
+
+const refreshNativeBasePayload = () => {
+  if (!currentConfig || !nativeHandlerConfigured) {
+    return;
+  }
+
+  configureNativeExceptionHandler({
+    url: getIngestUrl(currentConfig.url, currentConfig.projectKey),
+    apiKey: currentConfig.apiKey,
+    projectKey: currentConfig.projectKey,
+    headers: currentConfig.headers,
+    nativeFallbackEnabled: currentConfig.nativeFallbackEnabled,
+    executeOriginalHandler: currentConfig.executeOriginalHandler,
+    forceToQuit: currentConfig.forceToQuit,
+    basePayload: buildNativeBasePayload(),
+  });
+};
+
 const getDeviceInfo = () => {
   const uniqueId = safeDeviceInfoValue(
     () => DeviceInfo.getUniqueIdSync?.() ?? DeviceInfo.getDeviceId(),
@@ -222,11 +296,44 @@ const getDeviceInfo = () => {
       isTablet: DeviceInfo.isTablet(),
       deviceType: DeviceInfo.getDeviceType(),
       hasNotch: DeviceInfo.hasNotch(),
+      isEmulator: safeDeviceInfoValue(
+        () => DeviceInfo.isEmulatorSync?.(),
+        undefined
+      ),
+      carrier: safeDeviceInfoValue(() => DeviceInfo.getCarrierSync?.(), ''),
       deviceName: safeDeviceInfoValue(
         () => DeviceInfo.getDeviceNameSync?.(),
         undefined
       ),
     },
+    memoryInfo: {
+      totalMemory: safeDeviceInfoValue(
+        () => DeviceInfo.getTotalMemorySync?.(),
+        undefined
+      ),
+      usedMemory: safeDeviceInfoValue(
+        () => DeviceInfo.getUsedMemorySync?.(),
+        undefined
+      ),
+      maxMemory: safeDeviceInfoValue(
+        () => DeviceInfo.getMaxMemorySync?.(),
+        undefined
+      ),
+    },
+    storageInfo: {
+      totalDiskCapacity: safeDeviceInfoValue(
+        () => DeviceInfo.getTotalDiskCapacitySync?.(),
+        undefined
+      ),
+      freeDiskStorage: safeDeviceInfoValue(
+        () => DeviceInfo.getFreeDiskStorageSync?.(),
+        undefined
+      ),
+    },
+    batteryInfo: safeDeviceInfoValue(
+      () => DeviceInfo.getPowerStateSync?.() ?? {},
+      {}
+    ) as ExtraData,
   };
 };
 
@@ -285,7 +392,7 @@ export const buildExceptionPayload = ({
   const screenName = getStringValue(otherDetails.screenName);
   const userInfo = isObject(otherDetails.userInfo) ? otherDetails.userInfo : {};
 
-  return {
+  return sanitizeExceptionPayload({
     source: 'react-native',
     exceptionSource,
     stackSource: exceptionSource,
@@ -295,7 +402,6 @@ export const buildExceptionPayload = ({
     platform: Platform.OS,
     timestamp: reportedAt,
     reportedAt,
-    projectKey: currentConfig?.projectKey ?? '',
     ...deviceContext,
     ...(screenName ? { screenName } : {}),
     userInfo,
@@ -316,7 +422,7 @@ export const buildExceptionPayload = ({
     },
     extraData: otherDetails,
     otherDetails,
-  };
+  });
 };
 
 export const setExceptionContext = (context: ExceptionContext) => {
@@ -324,6 +430,7 @@ export const setExceptionContext = (context: ExceptionContext) => {
     ...currentContext,
     ...context,
   };
+  refreshNativeBasePayload();
 };
 
 export const clearExceptionContext = (keys?: Array<keyof ExceptionContext>) => {
@@ -335,6 +442,7 @@ export const clearExceptionContext = (keys?: Array<keyof ExceptionContext>) => {
   keys.forEach((key) => {
     delete currentContext[key];
   });
+  refreshNativeBasePayload();
 };
 
 export const setCurrentScreen = (screenName: string) => {
@@ -531,16 +639,6 @@ export const setupExceptionTracking = (
     ...options,
   };
 
-  const baseNativePayload = buildExceptionPayload({
-    source: 'native',
-    title: 'Native Exception',
-    message: 'Native exception handler configured',
-    stackTrace: '',
-    metadata: {
-      projectKey: currentConfig.projectKey,
-    },
-  });
-
   configureNativeExceptionHandler({
     url: getIngestUrl(currentConfig.url, currentConfig.projectKey),
     apiKey: currentConfig.apiKey,
@@ -549,8 +647,9 @@ export const setupExceptionTracking = (
     nativeFallbackEnabled: currentConfig.nativeFallbackEnabled,
     executeOriginalHandler: currentConfig.executeOriginalHandler,
     forceToQuit: currentConfig.forceToQuit,
-    basePayload: baseNativePayload,
+    basePayload: buildNativeBasePayload(),
   });
+  nativeHandlerConfigured = true;
 
   if (currentConfig.installJSHandler) {
     setJSExceptionHandler((error, isFatal) => {

@@ -110,10 +110,10 @@ SDK generated top-level fields:
 | `stackSource` | Source of the stack trace, usually same as `exceptionSource`. |
 | `title`, `message`, `stackTrace` | Error name, message, and stack trace. |
 | `timestamp`, `reportedAt` | ISO timestamp when the SDK built the payload. |
-| `projectKey` | The configured project key. |
 | `appVersion`, `buildNumber`, `readableVersion`, `bundleId` | App identity from `react-native-device-info`. |
 | `deviceId`, `installationId` | Stable unique device/install identifier used by backend device counting. |
 | `platform`, `osInfo`, `deviceInfo` | Platform, OS, and hardware details. |
+| `memoryInfo`, `storageInfo`, `batteryInfo` | Available memory, disk, and power details. |
 | `screenName` | Copied from custom context when provided. |
 | `userInfo` | Copied from custom context when provided. |
 | `metadata` | SDK metadata plus exception metadata. |
@@ -131,6 +131,8 @@ Recommended user fields:
 | Any other custom key | Any custom data API | Stored in `otherDetails` and `extraData`. |
 
 Avoid overriding these top-level fields in `onBeforeSend` unless you are intentionally changing backend grouping/counting behavior: `source`, `deviceId`, `title`, `message`, `stackTrace`, `appVersion`, `buildNumber`, `reportedAt`.
+
+Private routing/auth values such as `url`, `apiKey`, `headers`, `ingestUrl`, `project`, and `projectKey` are used for upload configuration only and are removed from the JSON payload body.
 
 ## Manual Capture
 
