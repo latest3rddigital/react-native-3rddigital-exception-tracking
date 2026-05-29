@@ -1,6 +1,6 @@
 {
   "name": "react-native-3rddigital-exception-tracking",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "A robust, lightweight exception tracking SDK for React Native applications. It seamlessly captures unhandled JavaScript/TypeScript errors, native Android (Java/Kotlin) crashes, and native iOS (Objective-C/Swift) exceptions, automatically reporting them to your centralized 3rdDigital monitoring dashboard via an internal API.",
   "main": "./lib/module/index.js",
   "types": "./lib/typescript/src/index.d.ts",
