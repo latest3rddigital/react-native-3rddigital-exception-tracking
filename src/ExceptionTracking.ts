@@ -48,7 +48,7 @@ export type ExceptionPayload = {
   bundleId: string;
   deviceId: string;
   installationId: string;
-  screenName?: string;
+  screenName: string;
   osInfo: {
     osName: typeof Platform.OS;
     osVersion: string;
@@ -408,7 +408,7 @@ export const buildExceptionPayload = ({
     timestamp: reportedAt,
     reportedAt,
     ...deviceContext,
-    ...(screenName ? { screenName } : {}),
+    screenName: screenName ?? '',
     userInfo,
     exceptionData: {
       exceptionSource,

@@ -36,6 +36,9 @@ static NSDictionary *BuildMemoryInfo(void);
 static NSDictionary *BuildStorageInfo(void);
 static NSDictionary *BuildBatteryInfo(void);
 static NSString *DeviceModelIdentifier(void);
+static void SetStringIfMissing(NSMutableDictionary *dictionary, NSString *key, NSString *value);
+static void SetBoolIfMissing(NSMutableDictionary *dictionary, NSString *key, BOOL value);
+static NSMutableDictionary *MergeFallbackDictionary(id primary, NSDictionary *fallback);
 
 @implementation ThirdDigitalExceptionTracking
 
@@ -425,51 +428,53 @@ static NSDictionary *BuildPayload(NSException *exception)
     }
     NSString *modelId = DeviceModelIdentifier();
 
-    if (appVersion.length > 0) {
+    if (appVersion.length > 0 && ![payload[@"appVersion"] isKindOfClass:[NSString class]]) {
         payload[@"appVersion"] = appVersion;
     }
-    if (buildNumber.length > 0) {
+    if (buildNumber.length > 0 && ![payload[@"buildNumber"] isKindOfClass:[NSString class]]) {
         payload[@"buildNumber"] = buildNumber;
     }
-    if (appVersion.length > 0 || buildNumber.length > 0) {
+    if (![payload[@"readableVersion"] isKindOfClass:[NSString class]] &&
+        (appVersion.length > 0 || buildNumber.length > 0)) {
         payload[@"readableVersion"] = [NSString stringWithFormat:@"%@%@%@",
                                        appVersion ?: @"",
                                        appVersion.length > 0 && buildNumber.length > 0 ? @" " : @"",
                                        buildNumber.length > 0 ? [NSString stringWithFormat:@"(%@)", buildNumber] : @""];
     }
-    if (bundleId.length > 0) {
+    if (bundleId.length > 0 && ![payload[@"bundleId"] isKindOfClass:[NSString class]]) {
         payload[@"bundleId"] = bundleId;
     }
     if (uniqueId.length > 0) {
         payload[@"deviceId"] = uniqueId;
-        payload[@"installationId"] = uniqueId;
+        if (![payload[@"installationId"] isKindOfClass:[NSString class]]) {
+            payload[@"installationId"] = uniqueId;
+        }
     }
 
     NSMutableDictionary *osInfo = [NSMutableDictionary dictionaryWithDictionary:payload[@"osInfo"] ?: @{}];
-    osInfo[@"osName"] = @"ios";
-    osInfo[@"osVersion"] = UIDevice.currentDevice.systemVersion;
-    osInfo[@"platform"] = UIDevice.currentDevice.systemName;
+    SetStringIfMissing(osInfo, @"osName", @"ios");
+    SetStringIfMissing(osInfo, @"osVersion", UIDevice.currentDevice.systemVersion);
     payload[@"osInfo"] = osInfo;
 
     NSMutableDictionary *deviceInfo = [NSMutableDictionary dictionaryWithDictionary:payload[@"deviceInfo"] ?: @{}];
-    deviceInfo[@"brand"] = @"Apple";
-    deviceInfo[@"manufacturer"] = @"Apple";
-    deviceInfo[@"model"] = modelId.length > 0 ? modelId : UIDevice.currentDevice.model;
-    deviceInfo[@"modelId"] = modelId.length > 0 ? modelId : UIDevice.currentDevice.model;
-    deviceInfo[@"deviceName"] = UIDevice.currentDevice.name;
-    deviceInfo[@"systemName"] = UIDevice.currentDevice.systemName;
-    deviceInfo[@"systemVersion"] = UIDevice.currentDevice.systemVersion;
-    deviceInfo[@"isTablet"] = @(UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad);
-    deviceInfo[@"deviceType"] = UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPad ? @"Tablet" : @"Handset";
-    deviceInfo[@"hasNotch"] = @NO;
+    SetStringIfMissing(deviceInfo, @"brand", @"Apple");
+    SetStringIfMissing(deviceInfo, @"manufacturer", @"Apple");
+    SetStringIfMissing(deviceInfo, @"model", UIDevice.currentDevice.model);
+    SetStringIfMissing(deviceInfo, @"modelId", modelId.length > 0 ? modelId : UIDevice.currentDevice.model);
+    SetStringIfMissing(deviceInfo, @"deviceName", UIDevice.currentDevice.name);
+    SetStringIfMissing(deviceInfo, @"systemName", UIDevice.currentDevice.systemName);
+    SetStringIfMissing(deviceInfo, @"systemVersion", UIDevice.currentDevice.systemVersion);
+    SetBoolIfMissing(deviceInfo, @"isTablet", UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad);
+    SetStringIfMissing(deviceInfo, @"deviceType", UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPad ? @"Tablet" : @"Handset");
+    SetBoolIfMissing(deviceInfo, @"hasNotch", NO);
     if (uniqueId.length > 0) {
         deviceInfo[@"deviceId"] = uniqueId;
         deviceInfo[@"uniqueId"] = uniqueId;
     }
     payload[@"deviceInfo"] = deviceInfo;
-    NSDictionary *memoryInfo = BuildMemoryInfo();
-    NSDictionary *storageInfo = BuildStorageInfo();
-    NSDictionary *batteryInfo = BuildBatteryInfo();
+    NSDictionary *memoryInfo = MergeFallbackDictionary(payload[@"memoryInfo"], BuildMemoryInfo());
+    NSDictionary *storageInfo = MergeFallbackDictionary(payload[@"storageInfo"], BuildStorageInfo());
+    NSDictionary *batteryInfo = MergeFallbackDictionary(payload[@"batteryInfo"], BuildBatteryInfo());
     payload[@"memoryInfo"] = memoryInfo;
     payload[@"storageInfo"] = storageInfo;
     payload[@"batteryInfo"] = batteryInfo;
@@ -550,12 +555,53 @@ static NSDictionary *BuildBatteryInfo(void)
 
 static NSString *DeviceModelIdentifier(void)
 {
+#if TARGET_IPHONE_SIMULATOR
+    char *simulatorModelIdentifier = getenv("SIMULATOR_MODEL_IDENTIFIER");
+    if (simulatorModelIdentifier != NULL) {
+        return [NSString stringWithUTF8String:simulatorModelIdentifier] ?: @"";
+    }
+#endif
     struct utsname systemInfo;
     if (uname(&systemInfo) != 0) {
         return @"";
     }
     return [NSString stringWithCString:systemInfo.machine
                               encoding:NSUTF8StringEncoding] ?: @"";
+}
+
+static void SetStringIfMissing(NSMutableDictionary *dictionary, NSString *key, NSString *value)
+{
+    id existing = dictionary[key];
+    if (![existing isKindOfClass:[NSString class]] && value.length > 0) {
+        dictionary[key] = value;
+        return;
+    }
+    if ([existing isKindOfClass:[NSString class]] && [(NSString *)existing length] == 0 && value.length > 0) {
+        dictionary[key] = value;
+    }
+}
+
+static void SetBoolIfMissing(NSMutableDictionary *dictionary, NSString *key, BOOL value)
+{
+    if (dictionary[key] == nil || dictionary[key] == [NSNull null]) {
+        dictionary[key] = @(value);
+    }
+}
+
+static NSMutableDictionary *MergeFallbackDictionary(id primary, NSDictionary *fallback)
+{
+    NSMutableDictionary *merged = [primary isKindOfClass:[NSDictionary class]]
+        ? [NSMutableDictionary dictionaryWithDictionary:(NSDictionary *)primary]
+        : [NSMutableDictionary dictionary];
+
+    [fallback enumerateKeysAndObjectsUsingBlock:^(id key, id value, BOOL *stop) {
+        id existing = merged[key];
+        if (existing == nil || existing == [NSNull null]) {
+            merged[key] = value;
+        }
+    }];
+
+    return merged;
 }
 
 static NSString *StackTraceString(NSException *exception)

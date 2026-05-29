@@ -329,51 +329,60 @@ object NativeExceptionReporter {
                 context.contentResolver,
                 Settings.Secure.ANDROID_ID
             )?.takeIf { it.isNotBlank() } ?: uniqueId
-            if (!versionName.isNullOrBlank()) {
+            if (!versionName.isNullOrBlank() && payload.optString("appVersion").isBlank()) {
                 payload.put("appVersion", versionName)
             }
-            if (!buildNumber.isNullOrBlank()) {
+            if (!buildNumber.isNullOrBlank() && payload.optString("buildNumber").isBlank()) {
                 payload.put("buildNumber", buildNumber)
             }
-            if (!versionName.isNullOrBlank() || !buildNumber.isNullOrBlank()) {
+            if (
+                payload.optString("readableVersion").isBlank() &&
+                (!versionName.isNullOrBlank() || !buildNumber.isNullOrBlank())
+            ) {
                 payload.put(
                     "readableVersion",
                     listOfNotNull(versionName, buildNumber?.let { "($it)" }).joinToString(" ")
                 )
             }
-            payload.put("bundleId", context.packageName)
+            if (payload.optString("bundleId").isBlank()) {
+                payload.put("bundleId", context.packageName)
+            }
             if (!uniqueId.isNullOrBlank()) {
                 payload.put("deviceId", uniqueId)
-                payload.put("installationId", uniqueId)
+                if (payload.optString("installationId").isBlank()) {
+                    payload.put("installationId", uniqueId)
+                }
             }
         }
 
         val osInfo = payload.optJSONObject("osInfo") ?: JSONObject()
-        osInfo.put("osName", "android")
-        osInfo.put("osVersion", Build.VERSION.RELEASE)
-        osInfo.put("apiLevel", Build.VERSION.SDK_INT)
+        putStringIfBlank(osInfo, "osName", "android")
+        putStringIfBlank(osInfo, "osVersion", Build.VERSION.RELEASE)
+        if (!osInfo.has("apiLevel") || osInfo.isNull("apiLevel")) {
+            osInfo.put("apiLevel", Build.VERSION.SDK_INT)
+        }
         payload.put("osInfo", osInfo)
 
         val deviceInfo = payload.optJSONObject("deviceInfo") ?: JSONObject()
-        deviceInfo.put("brand", Build.BRAND)
-        deviceInfo.put("manufacturer", Build.MANUFACTURER)
-        deviceInfo.put("model", Build.MODEL)
-        deviceInfo.put("modelId", Build.DEVICE)
-        deviceInfo.put("deviceName", Build.MODEL)
+        putStringIfBlank(deviceInfo, "brand", Build.BRAND)
+        putStringIfBlank(deviceInfo, "manufacturer", Build.MANUFACTURER)
+        putStringIfBlank(deviceInfo, "model", Build.MODEL)
+        putStringIfBlank(deviceInfo, "modelId", Build.DEVICE)
+        putStringIfBlank(deviceInfo, "deviceName", Build.MODEL)
         if (!uniqueId.isNullOrBlank()) {
             deviceInfo.put("deviceId", uniqueId)
             deviceInfo.put("uniqueId", uniqueId)
         }
-        deviceInfo.put("systemName", "Android")
-        deviceInfo.put("systemVersion", Build.VERSION.RELEASE)
-        deviceInfo.put("isTablet", false)
-        deviceInfo.put("deviceType", Build.TYPE)
-        deviceInfo.put("hasNotch", false)
+        putStringIfBlank(deviceInfo, "systemName", "Android")
+        putStringIfBlank(deviceInfo, "systemVersion", Build.VERSION.RELEASE)
+        putBooleanIfMissing(deviceInfo, "isTablet", false)
+        putStringIfBlank(deviceInfo, "deviceType", Build.TYPE)
+        putBooleanIfMissing(deviceInfo, "hasNotch", false)
         payload.put("deviceInfo", deviceInfo)
 
-        val memoryInfo = buildMemoryInfo(context)
-        val storageInfo = buildStorageInfo(context)
-        val batteryInfo = buildBatteryInfo(context)
+        val memoryInfo = mergeFallbackObject(payload.optJSONObject("memoryInfo"), buildMemoryInfo(context))
+        val storageInfo = mergeFallbackObject(payload.optJSONObject("storageInfo"), buildStorageInfo(context))
+        val batteryInfo = mergeFallbackObject(payload.optJSONObject("batteryInfo"), buildBatteryInfo(context))
         payload.put("memoryInfo", memoryInfo)
         payload.put("storageInfo", storageInfo)
         payload.put("batteryInfo", batteryInfo)
@@ -460,6 +469,30 @@ object NativeExceptionReporter {
 
     private fun removePrivateFields(json: JSONObject) {
         privatePayloadKeys.forEach { key -> json.remove(key) }
+    }
+
+    private fun putStringIfBlank(json: JSONObject, key: String, value: String?) {
+        if (json.optString(key).isBlank() && !value.isNullOrBlank()) {
+            json.put(key, value)
+        }
+    }
+
+    private fun putBooleanIfMissing(json: JSONObject, key: String, value: Boolean) {
+        if (!json.has(key) || json.isNull(key)) {
+            json.put(key, value)
+        }
+    }
+
+    private fun mergeFallbackObject(primary: JSONObject?, fallback: JSONObject): JSONObject {
+        val merged = primary ?: JSONObject()
+        val keys = fallback.keys()
+        while (keys.hasNext()) {
+            val key = keys.next()
+            if (!merged.has(key) || merged.isNull(key)) {
+                merged.put(key, fallback.opt(key))
+            }
+        }
+        return merged
     }
 
     private fun postException(payload: JSONObject): Boolean {
